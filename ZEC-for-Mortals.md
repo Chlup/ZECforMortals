@@ -1,7 +1,7 @@
 # ZEC for Mortals
 ### Zcash for mobile wallet developers — a canonical handbook, from app engineering to shielded-protocol fluency
 
-> **Current as of:** network upgrade **NU6.1**, activated on Zcash mainnet at block **3,146,400**, mined **24 November 2025**, consensus branch ID `0x4DEC4DF0` ([z.cash/upgrade/nu6-1](https://z.cash/upgrade/nu6-1/), [ZIP 255](https://zips.z.cash/zip-0255)). The next upgrade, **NU7** ("Project Tachyon"), is on **testnet only** as of this writing and has no mainnet activation height ([z.cash/upgrade/nu7](https://z.cash/upgrade/nu7/)).
+> **Current as of:** network upgrade **NU6.2**, an emergency security hard fork activated on Zcash mainnet at block **3,364,600** on **3 June 2026**, consensus branch ID `0x5437f330`. NU6.2 re-enabled the Orchard pool with a corrected zero-knowledge proof circuit after a critical soundness bug was found by audit and responsibly disclosed — no exploitation occurred, and the turnstile confirmed total ZEC supply was intact (see §3.8 and [ZFND's write-up](https://zfnd.org/zebra-4-5-3-and-5-0-0-emergency-soft-fork-and-nu6-2-activation/)). The prior stable upgrade was **NU6.1** (block 3,146,400, 24 Nov 2025, branch `0x4DEC4DF0`). Further upgrades are in progress — including **NU7** ("Project Tachyon"), on testnet as of this writing ([z.cash/upgrade/nu7](https://z.cash/upgrade/nu7/)).
 >
 > **Compiled:** 1 July 2026.
 >
@@ -95,7 +95,7 @@ flowchart LR
     T -- "transparent (t→t)\n fully public, Bitcoin-like" --> T
 ```
 
-A privacy subtlety worth internalizing early: shielding and deshielding **expose the boundary**. The public side of a `t → z` or `z → t` transaction is visible, and the amounts crossing the boundary can be correlated. The strongest privacy comes from value that lives its whole life shielded. Your UI decisions (defaulting to shielded addresses, warning on transparent flows) have real privacy consequences for users — which is why understanding the pools is not academic.
+A privacy subtlety worth internalizing early: shielding and deshielding **expose the boundary**. The public side of a `t → z` or `z → t` transaction is visible, and the amounts crossing the boundary can be correlated. The same is true *between* shielded pools: a Sapling↔Orchard transfer is not fully private either, because the value moving from one pool to the other surfaces in each pool's public net balance (the `valueBalance` field). Only a *same-pool* shielded transfer — Sapling→Sapling or Orchard→Orchard — hides the amount completely. The strongest privacy therefore comes from value that lives its whole life inside one shielded pool. Your UI decisions (defaulting to shielded addresses, warning on transparent *and* cross-pool flows, keeping funds in Orchard) have real privacy consequences for users — which is why understanding the pools is not academic.
 
 ### 1.3 The wallet is (almost) nothing
 
@@ -158,7 +158,7 @@ A few things a wallet developer should take from this table:
 - **Sapling and Orchard are both live.** A wallet must handle *both*: a user may hold Sapling notes, Orchard notes, or a mix. They are separate systems with separate keys and separate cryptography (Chapter 3). Orchard is where new shielded activity is encouraged to go.
 - **Pools are anonymity sets.** Each shielded pool forms "a separate anonymity set" ([ZIP 224](https://zips.z.cash/zip-0224)). More users transacting in the same pool means better privacy for each of them — a reason the ecosystem pushes everyone toward the current pool (Orchard) rather than fragmenting across old ones.
 
-> **Turnstiles.** Zcash publishes, per pool, the net value entering and leaving it — a "turnstile" — so the total ZEC in each shielded pool is auditable even though individual balances are not. This is a monetary-integrity safeguard (it would catch a counterfeiting bug as an impossible pool balance), and it's why cross-boundary amounts are visible in aggregate. Good to know exists; rarely something a wallet UI surfaces.
+> **Turnstiles.** Zcash publishes, per pool, the net value entering and leaving it — a "turnstile" — so the total ZEC in each shielded pool is auditable even though individual balances are not. This is a monetary-integrity safeguard (it would catch a counterfeiting bug as an impossible pool balance), and it's why cross-boundary amounts are visible in aggregate. Good to know exists; rarely something a wallet UI surfaces. It is not hypothetical: during the June 2026 NU6.2 incident (§3.8), the turnstile was exactly what let the ecosystem confirm the total ZEC supply stayed intact while an Orchard circuit bug was being fixed.
 
 ### 2.2 Addresses, and why "which pool?" matters
 
@@ -173,7 +173,9 @@ A **Unified Address (UA)**, defined in [ZIP 316](https://zips.z.cash/zip-0316), 
 | `0x02` | Sapling |
 | `0x03` | Orchard |
 
-The sender's wallet reads the UA, sees which receivers it contains, and **non-interactively picks the best one it can pay** — preferring the most private/modern pool both sides support (Orchard, then Sapling, then transparent). A UA must contain at least one shielded receiver, and there is intentionally **no** Sprout typecode (you cannot receive into a closing pool). UAs are encoded with **Bech32m** (chosen over Bech32 to handle variable-length input).
+The sender's wallet reads the UA, sees which receivers it contains, and **non-interactively picks a receiver to pay** — generally preferring the most private/modern pool both sides support (Orchard, then Sapling, then transparent). A UA must contain at least one shielded receiver, and there is intentionally **no** Sprout typecode (you cannot receive into a closing pool). UAs are encoded with **Bech32m** (chosen over Bech32 to handle variable-length input).
+
+> **Receiver selection is a privacy decision, not just "newest wins."** A naive "always prefer the newest pool" rule can *hurt* privacy. Suppose the sender holds only **Sapling** notes and the recipient's UA offers both Orchard and Sapling: choosing the Orchard receiver forces a cross-pool Sapling→Orchard transfer, which (per §1.2) reveals the amount via the public `valueBalance`. A privacy-aware wallet instead **matches the sender's own funded pool** where it can — here, paying the Sapling receiver keeps it Sapling→Sapling and fully hidden. [ZIP 315](https://zips.z.cash/zip-0315) (wallet best practices) codifies related guidance — e.g. wallets *"MUST NOT automatically combine funds across pools,"* since that can reveal a user's holdings. So good selection depends on the *sender's* pool balances, not only the recipient's newest receiver.
 
 ```
 u1qsj8v...        ← a Unified Address (mainnet prefix "u")
@@ -217,7 +219,23 @@ So a small transaction (a couple of actions) pays `5000 × 2 = 10,000` zatoshis 
 
 Shielded outputs can carry a **memo**: a fixed **512-byte** field travelling *inside* the encrypted note, visible only to the recipient (Protocol Specification §5.5; interpretation refined by the draft [ZIP 302](https://zips.z.cash/zip-0302)). It is the private "note/description" field users expect. Because it lives in the ciphertext, the memo is never public — but it is only present on *shielded* outputs, so a memo cannot accompany a purely transparent payment.
 
-> **On the horizon — read as forward-looking, not current fact.** The light-client protocol definitions have begun to reference a *third* shielded pool, provisionally called **"Ironwood"** (it appears as `PoolType.IRONWOOD` in the current [lightwallet-protocol](https://github.com/zcash/lightwallet-protocol) definitions). As of this NU6.1 edition it is **not** described in any finalized ZIP that could be located, and it is associated with the still-testnet NU7 / "Project Tachyon" work. Treat Orchard as the current shielded pool; note Ironwood only as something a protocol engineer may raise, and flag it for verification when NU7 approaches mainnet.
+### 2.6 Transparent-exclusive (TEX) addresses — ZIP 320
+
+A **TEX address** (`tex1…`, [ZIP 320](https://zips.z.cash/zip-0320)) is cryptographically just an ordinary transparent P2PKH address, but its encoding carries a directive: **only pay it from transparent funds.** A ZIP-320-aware wallet that sees a `tex1…` recipient will not spend shielded notes straight to it — it first deshields to a transparent address it controls, then pays from there.
+
+The reason is exchange compatibility, not user privacy. Some exchanges (the motivating case was Binance, in 2023) must be able to identify and, if necessary, *return* a deposit to its source address — impossible if the funds arrive directly from a shielded pool. A TEX address guarantees a transparent, refundable source. The user's own privacy gain is marginal (the amount is visible on both hops), so treat TEX as a *compliance* affordance. Compliant wallets route the send through a **fresh, one-shot ephemeral transparent address** derived from the seed (on its own derivation branch) rather than reusing the main t-address, which removes address-reuse correlation (though not amount correlation). Note the protocol does **not** enforce TEX semantics — honoring the directive is the sending wallet's responsibility.
+
+### 2.7 Payment request URIs — ZIP 321
+
+[ZIP 321](https://zips.z.cash/zip-0321) defines a standard `zcash:` payment URI — the analogue of Bitcoin's BIP-21 `bitcoin:` links — so a link or QR code can open a pre-filled send screen:
+
+```
+zcash:u1address...?amount=1.5&memo=<base64url>&label=Coffee&message=Thanks
+```
+
+Core parameters are `address`, `amount`, `label`, `message`, and `memo` (base64url-encoded, since memos are binary). The format also supports **multiple payments** in a single URI via indexed parameters, and works with Unified Addresses or with individual receivers. This is the standard to implement for deep links, QR scanning, and "request payment" flows.
+
+> **On the horizon — read as forward-looking, not current fact.** The light-client protocol definitions have begun to reference a *third* shielded pool, provisionally called **"Ironwood"** (it appears as `PoolType.IRONWOOD` in the current [lightwallet-protocol](https://github.com/zcash/lightwallet-protocol) definitions). As of this NU6.2 edition, Orchard remains the current shielded pool and Ironwood is not yet active on mainnet; a near-term upgrade (**NU6.3**) is slated to introduce it, and a later revision of this handbook will cover it properly. For now, treat Orchard as the current shielded pool and note Ironwood only as something a protocol engineer may raise.
 
 ### Check yourself
 
@@ -226,6 +244,8 @@ Shielded outputs can carry a **memo**: a fixed **512-byte** field travelling *in
 3. Why does giving every contact a fresh diversified address cost the wallet nothing at scan time?
 4. A user sends a minimal shielded payment. Roughly what fee do they pay, and per what unit is it charged?
 5. Where does a memo live, who can read it, and why can't a transparent-only payment carry one?
+6. What does a `tex1…` (TEX) address tell a sending wallet to do, and who is that feature actually for?
+7. A sender holds only Sapling notes; the recipient's UA offers Orchard and Sapling. Which receiver should a privacy-aware wallet pay, and why?
 
 ---
 
@@ -317,6 +337,8 @@ Not all keys are equal, and the split is a security feature you will lean on in 
 
 The hierarchy is strictly one-way (spec §3.1): spending key → full viewing key → incoming viewing key. You can derive a viewing key from a spending key, never the reverse.
 
+Under the hood, a full viewing key bundles the sub-keys that do these jobs: an **incoming viewing key** (`ivk`) for incoming notes, an **outgoing viewing key** (`ovk`) for recovering your *own* sends (what you sent and to whom), and a **nullifier-deriving key** (`nk`) that computes nullifiers. This is why an FVK can *detect* that your notes were spent yet still cannot *authorize* a spend — authorizing needs the spend authorizing key (`ask`), which only the spending key holds, not `nk`. (A useful nugget: a wallet can encrypt a payment with a random, immediately-discarded `ovk`, so that even a later holder of your FVK cannot recover which address that payment went to.)
+
 For Unified Addresses, the viewing key is bundled into a **Unified Full Viewing Key (UFVK)** — encoded `uview…` — which combines the per-pool FVKs ([ZIP 316](https://zips.z.cash/zip-0316)). A wallet's sync engine typically imports **only a UFVK**: it can do all four jobs (read, recognize, stay provable, hold the truth) with viewing capability alone, and is *structurally incapable of stealing funds* because the spending key was never handed to it. This "the grinding, network-facing component holds viewing keys only" design is a property worth protecting in any wallet architecture. (The parallel Unified *Incoming* Viewing Key, `uivk…`, carries incoming capability only.)
 
 ### 3.8 zk-SNARK proofs — the black box, honestly labeled
@@ -342,6 +364,8 @@ The privacy heart of it (spec §1.2): "when a note is spent, the spender only pr
 | **Orchard** | Halo 2 (Pallas/Vesta curves) | **No** — Halo 2 needs no trusted setup, which is a major reason Orchard was built. ([ZIP 224](https://zips.z.cash/zip-0224): Orchard "uses the Halo 2 proving system … [and] does not require an SRS.") |
 
 That's the whole black box: proofs are *what makes privacy and validity coexist*, they're *expensive to make and cheap to check*, and *Orchard removed the trusted setup that Sapling needed.* If you can say those three sentences, you can hold your end of a zk conversation.
+
+> **When the black box leaks: the NU6.2 Orchard fix (June 2026).** A black box still has an implementation inside it, and implementations can have bugs. In May 2026 an independent auditor found a **soundness** bug in the Orchard Action circuit (in the `halo2_gadgets` crate): it could have let the Orchard pool accept invalid state transitions — i.e. double-spends *within Orchard* — though the **turnstile** (§2.1) still made inflating the total ZEC supply impossible. It was responsibly disclosed, and the network shipped a two-step fix with no known exploitation: an emergency **soft fork** (mainnet block 3,363,426) that temporarily disabled Orchard, then the **NU6.2** hard fork (block 3,364,600, 3 June 2026, branch `0x5437f330`) that re-enabled Orchard with the corrected circuit plus a new consensus rule rejecting malformed Orchard proofs. A hard fork was required because fixing a proof circuit means changing its pinned verifying key — something a software patch alone can't do. Takeaways for a wallet dev: "soundness" (the system accepts only valid transactions) is the exact property that bug threatened; the turnstile is the safety net that bounds the blast radius; and Sapling and transparent were unaffected because the flaw was specific to the Orchard circuit. Source: [ZFND, NU6.2 activation](https://zfnd.org/zebra-4-5-3-and-5-0-0-emergency-soft-fork-and-nu6-2-activation/).
 
 ### Check yourself
 
@@ -738,7 +762,7 @@ Depths matter: a 1-block reorg is routine; a 6-block reorg is rare; a 100-block 
 - **Confirmations.** A note is only as final as the block that created it. Wallets typically require a small number of confirmations before treating an incoming note as spendable (the common default is on the order of ~10 blocks, but the exact policy is a wallet/SDK setting — verify against your SDK rather than hard-coding an assumption). Fewer confirmations = more exposure to reorgs (§7.4).
 - **Pending change locks value.** Right after you send, the note you spent is gone and your **change** note may not yet be confirmed — so spendable balance can briefly dip below total balance. This is normal, not a bug.
 - **Spendable vs. total vs. synced.** At any moment a wallet may distinguish: *total* (all notes it knows about), *spendable* (confirmed, unspent, with current witnesses), and *sync progress* (how much history is scanned). These are three different truths; conflating them produces confusing UIs (a balance that looks spendable but isn't, or a "not synced" state that nonetheless can send — §7.3).
-- **Expiry.** A built transaction has an expiry height; if it isn't mined in time it can expire and the inputs become spendable again. Long signing flows (Chapter 5) need to account for this.
+- **Expiry.** A built transaction has an expiry height ([ZIP 203](https://zips.z.cash/zip-0203)); if it isn't mined in time it can expire and the inputs become spendable again (the default is ~20 blocks). Long signing flows (Chapter 5) need to account for this.
 
 ### 7.6 Friction that's specific to mobile
 
@@ -799,6 +823,8 @@ A lookup chapter. Definitions are deliberately short; the chapter reference poin
 - **Note commitment.** The public hash of a note, appended to the note commitment tree; reveals nothing about the note. *(Ch. 3.2)*
 - **Note commitment tree.** The global, append-only, fixed-depth (32 for Sapling/Orchard) incremental Merkle tree of all commitments; separate tree per pool. *(Ch. 3.3)*
 - **Nullifier.** A note's unique, owner-derivable, one-time serial number, published on spend to prevent double-spends without revealing which note. *(Ch. 3.6)*
+- **Outgoing viewing key (OVK).** A component of the full viewing key that lets you decrypt your *own outgoing* notes — what you sent and to which address. *(Ch. 3.7)*
+- **Payment request URI (ZIP 321).** A `zcash:` link/QR that encodes a payment request (address, amount, memo, label); opens a pre-filled send screen. *(Ch. 2.7)*
 - **PCZT.** Partially Created Zcash Transaction — a portable in-progress transaction passed through roles (Creator → … → Prover → Signer → … → Extractor); Zcash's PSBT analogue. *(Ch. 5)*
 - **Pool (value pool).** A compartment of the ledger with its own rules/keys: transparent, Sprout (legacy), Sapling, Orchard. *(Ch. 2.1)*
 - **Proposal.** A described-but-unbuilt transaction plan (inputs, outputs, change, fees) from the input-selection stage. *(Ch. 4.2)*
@@ -808,6 +834,7 @@ A lookup chapter. Definitions are deliberately short; the chapter reference poin
 - **Shielding.** Moving value from transparent into a shielded pool (`t → z`); the entry is visible. *(Ch. 1.2)*
 - **Spend-before-sync.** Scanning tip-first (via `suggest_scan_ranges`) so recent funds become spendable before full history finishes. *(Ch. 7.3)*
 - **Spending key.** The key that authorizes moving money; kept in native secure storage, never in the sync core or on a server. *(Ch. 3.7)*
+- **TEX address (ZIP 320).** A `tex1…` transparent address that signals "pay me only from transparent funds," used for exchange-deposit compliance; compliant wallets route via a one-shot ephemeral t-address. *(Ch. 2.6)*
 - **Trial decryption.** Attempting to decrypt every shielded output with your viewing keys to recognize your own notes; intrinsically client-side. *(Ch. 7.1)*
 - **Turnstile.** The per-pool accounting of value entering/leaving a shielded pool, making pool totals auditable. *(Ch. 2.1)*
 - **UFVK (Unified Full Viewing Key).** A ZIP 316 bundle of per-pool full viewing keys (`uview…`); what a sync engine typically imports. *(Ch. 3.7)*
@@ -822,14 +849,18 @@ Zcash Improvement Proposals are the primary standards. Fetch any at `https://zip
 | ZIP | Title | Status | Relevance |
 |---|---|---|---|
 | [32](https://zips.z.cash/zip-0032) | Shielded Hierarchical Deterministic Wallets | Final | Key derivation from seed; diversified addresses. *(Ch. 2.3)* |
+| [203](https://zips.z.cash/zip-0203) | Transaction Expiry | Final | `nExpiryHeight` — a transaction can't be mined after its expiry block. *(Ch. 7.5)* |
 | [224](https://zips.z.cash/zip-0224) | Orchard Shielded Protocol | Final | The current shielded pool; Halo 2, no trusted setup. *(Ch. 2, 3.8)* |
 | [225](https://zips.z.cash/zip-0225) | Version 5 Transaction Format | Final | The v5 tx format (Sapling+Orchard bundles; no Sprout). *(Ch. 4.5)* |
 | [244](https://zips.z.cash/zip-0244) | Transaction Identifier Non-Malleability | Final | Stable txid / signature digest scheme. *(Ch. 4.5)* |
 | [253](https://zips.z.cash/zip-0253) | Deployment of NU6 | Final | NU6 activation (block 2,726,400, ~Nov 2024). *(Ch. 8.3)* |
 | [255](https://zips.z.cash/zip-0255) | Deployment of NU6.1 | Proposed¹ | NU6.1 activation (block 3,146,400, 24 Nov 2025). *(Ch. 8.3)* |
 | [302](https://zips.z.cash/zip-0302) | Standardized Memo Field Format | Draft | Memo interpretation (the 512-byte field itself is Protocol Spec §5.5). *(Ch. 2.5)* |
+| [315](https://zips.z.cash/zip-0315) | Best Practices for Wallet Implementations | Draft | Wallet security/privacy guidance (pool handling, receiver selection, address rotation). *(Ch. 2.2)* |
 | [316](https://zips.z.cash/zip-0316) | Unified Addresses and Unified Viewing Keys | Active (Rev 0) | UAs, receivers/typecodes, UFVK/UIVK. *(Ch. 2.2, 3.7)* |
 | [317](https://zips.z.cash/zip-0317) | Proportional Transfer Fee Mechanism | Active | Fee rule: 5000 zat/action, 2 grace actions. Obsoletes ZIP 313. *(Ch. 2.4)* |
+| [320](https://zips.z.cash/zip-0320) | TEX Addresses (transparent-source-only) | Active | `tex1…` addresses + ephemeral-address derivation for exchange deposits. *(Ch. 2.6)* |
+| [321](https://zips.z.cash/zip-0321) | Payment Request URIs | Active | `zcash:` payment URIs — amount, memo, label; multi-payment support. *(Ch. 2.7)* |
 | [374](https://github.com/zcash/zips/pull/1063) | Partially Created Zcash Transaction Format | **Draft²** | PCZT format. **Not yet a published ZIP** — the `pczt` crate is canonical. *(Ch. 5.5)* |
 
 Cross-references outside the ZIP series: **BIP 32** (HD wallets), **BIP 174 / BIP 370** (PSBT / PSBT v2 — the model PCZT extends). *(Ch. 5.3)*
@@ -850,7 +881,9 @@ Each network upgrade (NU) can change consensus rules, so this handbook is stampe
 | Canopy | 1,046,400 | ~Nov 2020 | (Sprout became closing shortly after, Feb 2021.) |
 | **NU5** | 1,687,104 | 31 May 2022 | **Orchard pool; v5 tx format; Halo 2; Unified Addresses.** |
 | NU6 | 2,726,400 | ~Nov 2024 | Funding-model changes (out of scope here). |
-| **NU6.1** | 3,146,400 | 24 Nov 2025 | Funding-model changes. **← this edition is current as of here.** |
+| NU6.1 | 3,146,400 | 24 Nov 2025 | Funding-model changes. |
+| **NU6.2** | 3,364,600 | 3 Jun 2026 | **Emergency security hard fork.** Re-enabled Orchard with a corrected zk-proof circuit after a soundness bug (branch `0x5437f330`; preceded by a soft fork at block 3,363,426 that briefly disabled Orchard). See §3.8. **← this edition is current as of here.** |
+| NU6.3 | — | — | Anticipated near-term upgrade introducing a new shielded pool (**Ironwood**). To be covered in a later revision. |
 | NU7 ("Tachyon") | — | testnet 22 May 2026; **no mainnet height yet** | Scaling of shielded throughput; will require Zebra (not `zcashd`). Forward-looking. |
 
 ### 8.4 Primary sources
@@ -861,16 +894,16 @@ Each network upgrade (NU) can change consensus rules, so this handbook is stampe
 - librustzcash (`zcash_client_backend`, `zcash_client_sqlite`) — https://github.com/zcash/librustzcash
 - `shardtree` crate — https://docs.rs/shardtree
 - Light-client protocol (compact blocks, gRPC) — https://github.com/zcash/lightwallet-protocol
-- Network upgrades — https://z.cash/upgrade/nu5/ · https://zips.z.cash/zip-0253 · https://z.cash/upgrade/nu6-1/ · https://z.cash/upgrade/nu7/
+- Network upgrades — https://z.cash/upgrade/nu5/ · https://zips.z.cash/zip-0253 · https://z.cash/upgrade/nu6-1/ · NU6.2 (ZFND): https://zfnd.org/zebra-4-5-3-and-5-0-0-emergency-soft-fork-and-nu6-2-activation/ · https://z.cash/upgrade/nu7/
 - BIP 174 (PSBT), the model for PCZT — https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki
 - Provided reference: *"Zcash Sync Engines"* course (Slipstream) — used for the sync/scan chapters as one engine's approach, cross-checked against the above.
 
 ---
 
 > ### ⚠ Review status
-> This handbook is **AI-assembled from cited primary sources and one provided reference course, and has not yet been reviewed by a protocol engineer.** Before it is treated as canonical, a Zcash protocol/blockchain engineer should verify it once — with particular attention to: the PCZT role pipeline (§5.2, currently grounded in the `pczt` crate ahead of a finalized ZIP), the note-commitment-tree depth constants (§3.3), the "Ironwood"/NU7 forward-looking notes (§2.5, §6.4), and the confirmation-count default (§7.5, deliberately left to the SDK). Record the review on the "Last reviewed by a protocol engineer" line at the top.
+> This handbook is **AI-assembled from cited primary sources and one provided reference course, and has not yet been reviewed by a protocol engineer.** Before it is treated as canonical, a Zcash protocol/blockchain engineer should verify it once — with particular attention to: the PCZT role pipeline (§5.2, currently grounded in the `pczt` crate ahead of a finalized ZIP), the note-commitment-tree depth constants (§3.3), the NU6.2 Orchard-fix sidebar (§3.8) and forward-looking Ironwood / NU6.3 / NU7 notes (§2.5, §6.4), and the confirmation-count default (§7.5, deliberately left to the SDK). Record the review on the "Last reviewed by a protocol engineer" line at the top.
 >
-> _End of handbook. Current as of NU6.1 · compiled 1 July 2026._
+> _End of handbook. Current as of NU6.2 · compiled 1 July 2026._
 
 
 
