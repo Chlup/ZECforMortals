@@ -1,7 +1,7 @@
 # ZEC for Mortals
 ### Zcash for mobile wallet developers — a canonical handbook, from app engineering to shielded-protocol fluency
 
-> **Current as of:** network upgrade **NU6.2**, an emergency security hard fork activated on Zcash mainnet at block **3,364,600** on **3 June 2026**, consensus branch ID `0x5437f330`. NU6.2 re-enabled the Orchard pool with a corrected zero-knowledge proof circuit after a critical soundness bug was found by audit and responsibly disclosed — no exploitation occurred, and the turnstile confirmed total ZEC supply was intact (see §3.8 and [ZFND's write-up](https://zfnd.org/zebra-4-5-3-and-5-0-0-emergency-soft-fork-and-nu6-2-activation/)). The prior stable upgrade was **NU6.1** (block 3,146,400, 24 Nov 2025, branch `0x4DEC4DF0`). Further upgrades are in progress — including **NU7** ("Project Tachyon"), on testnet as of this writing ([z.cash/upgrade/nu7](https://z.cash/upgrade/nu7/)).
+> **Current as of:** network upgrade **NU6.2**, an emergency security hard fork activated on Zcash mainnet at block **3,364,600** on **3 June 2026**, consensus branch ID `0x5437f330`. NU6.2 re-enabled the Orchard pool with a corrected zero-knowledge proof circuit after a critical soundness bug was found by audit and responsibly disclosed — no exploitation occurred, and the turnstile confirmed total ZEC supply was intact (see §3.8 and [ZFND's write-up](https://zfnd.org/zebra-4-5-3-and-5-0-0-emergency-soft-fork-and-nu6-2-activation/)). The prior stable upgrade was **NU6.1** (block 3,146,400, 24 Nov 2025, branch `0x4DEC4DF0`). Further upgrades are in progress: **NU6.3**, which introduces the **Ironwood** shielded pool (draft as of this writing, targeted for ~July 2026, mainnet height not yet set — see §2.8), and **NU7** ("Project Tachyon"), on testnet ([z.cash/upgrade/nu7](https://z.cash/upgrade/nu7/)).
 >
 > **Compiled:** 1 July 2026.
 >
@@ -145,12 +145,13 @@ Balance is a side effect of jobs 1–2. Send needs job 3. Sanity needs job 4. If
 
 A **value pool** is a distinct compartment of the ledger holding ZEC under one protocol's rules. Value doesn't automatically flow between pools; moving it takes an explicit transaction (a shielding/deshielding, or a cross-pool shielded transfer). There are four:
 
-| Pool | Kind | Introduced | Address prefix | Status today (NU6.1) |
+| Pool | Kind | Introduced | Address prefix | Status today (NU6.2) |
 |---|---|---|---|---|
 | **Transparent** | Public (UTXO) | 2016 launch | `t1` (P2PKH), `t3` (P2SH) | Fully supported; public, Bitcoin-like. |
 | **Sprout** | Shielded (1st gen) | 2016 launch | `zc` | **Legacy / closing** — no new value can enter; migrate out. |
 | **Sapling** | Shielded (2nd gen) | Sapling upgrade, block 419,200, Oct 2018 | `zs` | Supported; still holds real value. |
 | **Orchard** | Shielded (3rd gen) | NU5, block 1,687,104, [31 May 2022](https://z.cash/upgrade/nu5/) | (Unified only, `u`) | **Current** shielded pool; most new shielded activity. |
+| **Ironwood** | Shielded (Orchard successor) | **Planned — NU6.3** (draft; not yet on mainnet) | (Unified only; reuses the Orchard receiver) | **Forthcoming** — supply-integrity successor to Orchard; see §2.8. |
 
 A few things a wallet developer should take from this table:
 
@@ -235,7 +236,25 @@ zcash:u1address...?amount=1.5&memo=<base64url>&label=Coffee&message=Thanks
 
 Core parameters are `address`, `amount`, `label`, `message`, and `memo` (base64url-encoded, since memos are binary). The format also supports **multiple payments** in a single URI via indexed parameters, and works with Unified Addresses or with individual receivers. This is the standard to implement for deep links, QR scanning, and "request payment" flows.
 
-> **On the horizon — read as forward-looking, not current fact.** The light-client protocol definitions have begun to reference a *third* shielded pool, provisionally called **"Ironwood"** (it appears as `PoolType.IRONWOOD` in the current [lightwallet-protocol](https://github.com/zcash/lightwallet-protocol) definitions). As of this NU6.2 edition, Orchard remains the current shielded pool and Ironwood is not yet active on mainnet; a near-term upgrade (**NU6.3**) is slated to introduce it, and a later revision of this handbook will cover it properly. For now, treat Orchard as the current shielded pool and note Ironwood only as something a protocol engineer may raise.
+### 2.8 Ironwood — a new shielded pool (forthcoming, NU6.3)
+
+> **Status, read first.** As of this NU6.2 edition, **Ironwood is not yet live on mainnet.** It is defined by *draft* specifications ([ZIP 229 "Version 6 Transaction Format,"](https://zips.z.cash/zip-0229) Draft; [ZIP 2005 "Ironwood Quantum Recoverability,"](https://zips.z.cash/zip-2005) Proposed) and is targeted for the **NU6.3** upgrade around July 2026, with the mainnet activation height and consensus branch ID **not yet published**. The lightwalletd protocol is already Ironwood-ready (`PoolType.IRONWOOD`, `ironwoodTree`, `ironwoodActions`). Everything below is subject to change until those specs finalize — verify before relying on it.
+
+**What it is.** Ironwood is a **new shielded value pool** and the designated **successor to Orchard**. The main purpose of NU6.3, per ZIP 229, is *"to bolster confidence in Zcash's supply integrity, after the discovery and remediation of the Orchard soundness vulnerability"* (the NU6.2 bug, §3.8). A secondary purpose is **quantum recoverability**: Ironwood notes are derived so that, if the discrete-log assumption underpinning today's shielded protocols were ever broken (e.g. by a quantum computer), a future recovery protocol could still recover Ironwood funds — which is why the ecosystem will encourage moving funds *into* Ironwood over time.
+
+**Cryptographically it is barely new.** Ironwood *"reuses the Orchard Action encoding and proof system unchanged"* — the same Halo 2 Action circuit over Pallas/Vesta (§3.8). The only cryptographic change is how a note's randomness is derived (ZIP 2005), which is invisible to your UI. So do not think of Ironwood as "Orchard v2 with new crypto"; think of it as *"the Orchard machinery pointed at a fresh, separate pool."*
+
+**What actually changes for a wallet:**
+
+- **No new address, no new receiver.** ZIP 229 is explicit: *"The addition of the Ironwood pool does not change address structures or encodings"* and it *"will use the user's existing Orchard receiver."* Orchard spending/viewing keys grant authority over **both** pools — there is no separate Ironwood key to derive. Your existing UAs keep working.
+- **A separate note commitment tree.** Ironwood has its **own** commitment tree, anchor, and nullifier set, independent of Orchard's. Concretely your sync engine must scan and maintain a *second* Orchard-style tree (the compact-block protocol already carries `ironwoodActions` and an `ironwoodTree` state). Everything in Chapters 3 and 7 about trees and witnesses now applies **three** times (Sapling, Orchard, Ironwood).
+- **A new note "lead byte."** Ironwood output notes use note-plaintext lead byte `0x03` (Sapling/Orchard use `0x02`); ZIP 229 calls this *"the only note-level distinction between the two pools."* Trial decryption must handle it.
+- **A new transaction version.** NU6.3 introduces **v6** transactions (ZIP 229) with an "Ironwood component" bundle that reuses the Orchard action encoding. (A useful side effect for Chapter 5: in v6 the shielded anchors move into a transaction's *authorizing* data, so a transaction can be re-anchored without changing its txid — friendly to PCZT and hardware-signing flows.)
+- **Fees** (ZIP 317) are being revised for Ironwood but the exact treatment isn't final yet.
+
+**The Orchard turnstile and migration.** Ironwood ships with a **turnstile out of Orchard**, exactly the pattern Sprout→Sapling used. The Orchard pool is closed to new deposits and internal transfers (enforced by a consensus rule that Orchard outputs may only go to an address the sender can already spend), which nudges everyone to migrate. The point is **auditable supply**: the total moved Orchard→Ironwood passes through a turnstile, so anyone can verify no extra ZEC was created — the direct answer to the NU6.2 soundness scare. Wallets are expected to offer a **one-click "migrate to Ironwood"** flow. Two things to surface to users: migration is an ordinary cross-pool transfer, so (per §1.2) **the migrated amount is publicly visible**; and migrating improves the long-term (quantum) recoverability of those funds.
+
+**Bottom line for you:** when NU6.3 lands, a wallet's shielded work roughly doubles the Orchard bookkeeping (a second tree to scan, `0x03` notes to decrypt, v6 to build), reuses all the Orchard keys and addresses you already have, and gains a migration flow whose amounts are non-private. None of it needs new cryptography understanding beyond Chapter 3.
 
 ### Check yourself
 
@@ -246,6 +265,7 @@ Core parameters are `address`, `amount`, `label`, `message`, and `memo` (base64u
 5. Where does a memo live, who can read it, and why can't a transparent-only payment carry one?
 6. What does a `tex1…` (TEX) address tell a sending wallet to do, and who is that feature actually for?
 7. A sender holds only Sapling notes; the recipient's UA offers Orchard and Sapling. Which receiver should a privacy-aware wallet pay, and why?
+8. Ironwood reuses Orchard's keys, addresses, and proof system — so what actually changes for a wallet when NU6.3 activates, and why is an Orchard→Ironwood migration amount not private?
 
 ---
 
@@ -362,6 +382,7 @@ The privacy heart of it (spec §1.2): "when a note is spent, the spender only pr
 |---|---|---|
 | **Sapling** | Groth16 over the BLS12-381 curve | **Yes** — required a multi-party "trusted setup" ceremony (the Powers of Tau / Sapling MPC). If the secret "toxic waste" from that ceremony were ever reconstructed, forgery would be possible; the ceremony's many participants make that infeasible. |
 | **Orchard** | Halo 2 (Pallas/Vesta curves) | **No** — Halo 2 needs no trusted setup, which is a major reason Orchard was built. ([ZIP 224](https://zips.z.cash/zip-0224): Orchard "uses the Halo 2 proving system … [and] does not require an SRS.") |
+| **Ironwood** *(forthcoming, NU6.3)* | Reuses Orchard's Halo 2 Action circuit **unchanged** | **No** — identical to Orchard. Its only cryptographic change is a *quantum-recoverable* note derivation ([ZIP 2005](https://zips.z.cash/zip-2005)); it adds no new proving system. See §2.8. |
 
 That's the whole black box: proofs are *what makes privacy and validity coexist*, they're *expensive to make and cheap to check*, and *Orchard removed the trusted setup that Sapling needed.* If you can say those three sentences, you can hold your end of a zk conversation.
 
@@ -817,6 +838,7 @@ A lookup chapter. Definitions are deliberately short; the chapter reference poin
 - **FFI boundary.** The narrow C ABI between a wallet's native code and its Rust core; the only memory-`unsafe` surface. *(Ch. 6.2)*
 - **Fully-shielded.** A transaction whose value starts and stays shielded (`z → z`); sender, recipient, amount all hidden. *(Ch. 1.2)*
 - **Incoming viewing key (IVK).** Detects and decrypts incoming notes only. *(Ch. 3.7)*
+- **Ironwood.** A forthcoming shielded pool (NU6.3, draft) — an Orchard-protocol successor that reuses Orchard's Halo 2 circuit, keys, and receiver, but has its own commitment tree, a `0x03` note lead byte, quantum-recoverable notes, and a supply-integrity turnstile out of Orchard. *(Ch. 2.8)*
 - **lightwalletd.** The light-client server that runs a full node, produces compact blocks, and serves them over gRPC (`CompactTxStreamer`). Being succeeded by the "Z3 stack." *(Ch. 6.4)*
 - **Logical action.** The ZIP 317 unit of fee accounting (roughly per input/output across pools). *(Ch. 2.4)*
 - **Note.** A discrete unit of shielded value (amount + recipient + randomness); the shielded world's UTXO/banknote. *(Ch. 3.1)*
@@ -850,8 +872,10 @@ Zcash Improvement Proposals are the primary standards. Fetch any at `https://zip
 |---|---|---|---|
 | [32](https://zips.z.cash/zip-0032) | Shielded Hierarchical Deterministic Wallets | Final | Key derivation from seed; diversified addresses. *(Ch. 2.3)* |
 | [203](https://zips.z.cash/zip-0203) | Transaction Expiry | Final | `nExpiryHeight` — a transaction can't be mined after its expiry block. *(Ch. 7.5)* |
+| [209](https://zips.z.cash/zip-0209) | Prohibit Negative Shielded Chain Value Pool Balances | Final | The per-pool "turnstile" that makes supply auditable. *(Ch. 2.1, 2.8)* |
 | [224](https://zips.z.cash/zip-0224) | Orchard Shielded Protocol | Final | The current shielded pool; Halo 2, no trusted setup. *(Ch. 2, 3.8)* |
 | [225](https://zips.z.cash/zip-0225) | Version 5 Transaction Format | Final | The v5 tx format (Sapling+Orchard bundles; no Sprout). *(Ch. 4.5)* |
+| [229](https://zips.z.cash/zip-0229) | Version 6 Transaction Format | Draft | Defines the **Ironwood** pool + v6 tx format (NU6.3). *(Ch. 2.8)* |
 | [244](https://zips.z.cash/zip-0244) | Transaction Identifier Non-Malleability | Final | Stable txid / signature digest scheme. *(Ch. 4.5)* |
 | [253](https://zips.z.cash/zip-0253) | Deployment of NU6 | Final | NU6 activation (block 2,726,400, ~Nov 2024). *(Ch. 8.3)* |
 | [255](https://zips.z.cash/zip-0255) | Deployment of NU6.1 | Proposed¹ | NU6.1 activation (block 3,146,400, 24 Nov 2025). *(Ch. 8.3)* |
@@ -862,6 +886,7 @@ Zcash Improvement Proposals are the primary standards. Fetch any at `https://zip
 | [320](https://zips.z.cash/zip-0320) | TEX Addresses (transparent-source-only) | Active | `tex1…` addresses + ephemeral-address derivation for exchange deposits. *(Ch. 2.6)* |
 | [321](https://zips.z.cash/zip-0321) | Payment Request URIs | Active | `zcash:` payment URIs — amount, memo, label; multi-payment support. *(Ch. 2.7)* |
 | [374](https://github.com/zcash/zips/pull/1063) | Partially Created Zcash Transaction Format | **Draft²** | PCZT format. **Not yet a published ZIP** — the `pczt` crate is canonical. *(Ch. 5.5)* |
+| [2005](https://zips.z.cash/zip-2005) | Ironwood Quantum Recoverability | Proposed | Quantum-recoverable note derivation for the Ironwood pool. *(Ch. 2.8)* |
 
 Cross-references outside the ZIP series: **BIP 32** (HD wallets), **BIP 174 / BIP 370** (PSBT / PSBT v2 — the model PCZT extends). *(Ch. 5.3)*
 
@@ -883,7 +908,7 @@ Each network upgrade (NU) can change consensus rules, so this handbook is stampe
 | NU6 | 2,726,400 | ~Nov 2024 | Funding-model changes (out of scope here). |
 | NU6.1 | 3,146,400 | 24 Nov 2025 | Funding-model changes. |
 | **NU6.2** | 3,364,600 | 3 Jun 2026 | **Emergency security hard fork.** Re-enabled Orchard with a corrected zk-proof circuit after a soundness bug (branch `0x5437f330`; preceded by a soft fork at block 3,363,426 that briefly disabled Orchard). See §3.8. **← this edition is current as of here.** |
-| NU6.3 | — | — | Anticipated near-term upgrade introducing a new shielded pool (**Ironwood**). To be covered in a later revision. |
+| NU6.3 *(planned)* | TBA | targeted ~Jul 2026 | **Introduces the Ironwood pool** — an Orchard-protocol successor with a supply-integrity turnstile out of Orchard and quantum-recoverable notes; new **v6** transaction format ([ZIP 229](https://zips.z.cash/zip-0229), [ZIP 2005](https://zips.z.cash/zip-2005)). Draft; not yet activated, mainnet height/branch unset. See §2.8. |
 | NU7 ("Tachyon") | — | testnet 22 May 2026; **no mainnet height yet** | Scaling of shielded throughput; will require Zebra (not `zcashd`). Forward-looking. |
 
 ### 8.4 Primary sources
@@ -901,7 +926,7 @@ Each network upgrade (NU) can change consensus rules, so this handbook is stampe
 ---
 
 > ### ⚠ Review status
-> This handbook is **AI-assembled from cited primary sources and one provided reference course, and has not yet been reviewed by a protocol engineer.** Before it is treated as canonical, a Zcash protocol/blockchain engineer should verify it once — with particular attention to: the PCZT role pipeline (§5.2, currently grounded in the `pczt` crate ahead of a finalized ZIP), the note-commitment-tree depth constants (§3.3), the NU6.2 Orchard-fix sidebar (§3.8) and forward-looking Ironwood / NU6.3 / NU7 notes (§2.5, §6.4), and the confirmation-count default (§7.5, deliberately left to the SDK). Record the review on the "Last reviewed by a protocol engineer" line at the top.
+> This handbook is **AI-assembled from cited primary sources and one provided reference course, and has not yet been reviewed by a protocol engineer.** Before it is treated as canonical, a Zcash protocol/blockchain engineer should verify it once — with particular attention to: the PCZT role pipeline (§5.2, currently grounded in the `pczt` crate ahead of a finalized ZIP), the note-commitment-tree depth constants (§3.3), the NU6.2 Orchard-fix sidebar (§3.8), the **forthcoming Ironwood / NU6.3 section (§2.8)** — which is built entirely on *draft* specs (ZIP 229, ZIP 2005) and unactivated details that will shift before mainnet — the NU7 note (§6.4), and the confirmation-count default (§7.5, deliberately left to the SDK). Record the review on the "Last reviewed by a protocol engineer" line at the top.
 >
 > _End of handbook. Current as of NU6.2 · compiled 1 July 2026._
 
